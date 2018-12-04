@@ -1,0 +1,36 @@
+{
+  "name": "soundfonts",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "",
+    "build": "webpack"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/debug": "0.0.31",
+    "@types/mkdirp": "^0.5.2",
+    "@types/node": "^10.12.10",
+    "@types/progress": "^2.0.1",
+    "@types/rimraf": "^2.0.2",
+    "@types/tmp": "0.0.33",
+    "commander": "^2.19.0",
+    "debug": "^4.1.0",
+    "mkdirp": "^0.5.1",
+    "progress": "^2.0.1",
+    "riff-chunks": "github:turnerhayes/riff-chunks",
+    "rimraf": "^2.6.2",
+    "soundfont2mp3": "github:turnerhayes/soundfont2mp3#js-api-with-staging",
+    "tmp": "0.0.33",
+    "ts-node": "^7.0.1",
+    "typescript": "^3.2.1"
+  },
+  "devDependencies": {
+    "browserfs": "^1.4.3",
+    "ts-loader": "^5.3.1",
+    "webpack": "^4.26.1",
+    "webpack-cli": "^3.1.2"
+  }
+}
