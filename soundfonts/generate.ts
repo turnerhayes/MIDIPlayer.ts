@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { fork } from "child_process";
 import program from "commander";
 import createDebug from "debug";
 import mkdirp from "mkdirp";
@@ -69,10 +70,22 @@ const tempDirPromise = new Promise<string>(
   ),
 );
 
-tmp.setGracefulCleanup();
+const handleUglyExit = () => {
+  cleanupTempDir();
+  process.exit(1);
+};
+
+process.on("SIGINT", handleUglyExit);
+
+process.on("SIGTERM", handleUglyExit);
+
+process.on("uncaughtException", handleUglyExit);
+
+process.on("unhandledRejection", handleUglyExit);
 
 const soundfontFilePath = path.resolve(program.soundfont);
 
+// const maxNoteNumber = 2;
 const maxNoteNumber = 255;
 
 const promises: Array<Promise<any>> = [];
@@ -81,26 +94,74 @@ const promises: Array<Promise<any>> = [];
 
 const baseDir = path.resolve(__dirname, "sounds");
 
-function processNote(
+function processInChild(
   {
-    note,
     instrument,
     instrumentPath,
+    note,
     stagingDir,
-  }: IProcessNoteParameters,
+  }: {
+    instrument: number,
+    instrumentPath: string,
+    note: number,
+    stagingDir: string,
+  },
 ): Promise<void> {
-    const filePath = path.join(instrumentPath, `${note}.mp3`);
+  const cp = fork(
+    "./run-generate",
+  );
 
-    debug("Processing note %s for instrument %s", note, instrument);
+  // const handleProcExit = () => {
+  //   cp.kill();
+  //   process.off("beforeExit", handleProcExit);
+  // };
 
-    return processSoundfont({
-      debug: soundfont2mp3Debug,
-      instrument,
-      note,
-      output: filePath,
-      soundfont: soundfontFilePath,
-      staging: stagingDir,
-    });
+  // process.on("beforeExit", handleProcExit);
+
+  const promise = new Promise<void>(
+    (resolve, reject) => {
+      let isComplete = false;
+      cp.on("exit", () => {
+        if (!isComplete) {
+          resolve();
+          // process.off("beforeExit", handleProcExit);
+          isComplete = true;
+        }
+      });
+
+      cp.on("error", (err) => {
+        if (!isComplete) {
+          reject(err);
+          // process.off("beforeExit", handleProcExit);
+          isComplete = true;
+        }
+      });
+
+      cp.on("message", (message: any) => {
+        if (message.error && !isComplete) {
+          reject(message.error);
+          isComplete = true;
+        }
+
+        if (message.messages) {
+          message.messages.forEach(
+            (msg: [any]) => debug(...msg),
+          );
+        }
+      });
+    },
+  );
+
+  cp.send({
+    enableDebug: program.debug,
+    instrument,
+    instrumentPath,
+    note,
+    soundfontFilePath,
+    stagingDir,
+  });
+
+  return promise;
 }
 
 new Promise(
@@ -125,33 +186,28 @@ new Promise(
 ).then(
   ([stagingDir, soundfont]: [string, Soundfont]) => {
     debug("Staging files in dir %s", stagingDir);
-    const progressBar = new ProgressBar(
-      "[:bar] (:percent)",
-      {
-        complete: "=",
-        incomplete: " ",
-        total: soundfont.presets.length * maxNoteNumber,
-        width: 40,
-      },
-    );
+    const progressBar = debug.enabled ?
+      // If we have debugger statements, those will quickly push the progress bar offscreen,
+      // don't bother showing it
+      null :
+      new ProgressBar(
+        "[:bar] (:percent)",
+        {
+          complete: "=",
+          incomplete: " ",
+          total: soundfont.presets.length * maxNoteNumber,
+          width: 40,
+        },
+      );
 
+    if (progressBar) {
+      progressBar.render();
+    }
+
+    // let instrumentCount = 0;
     for (const preset of soundfont.presets) {
       const instrumentPath = path.join(baseDir, preset.MIDINumber.toString());
 
-      // processingPromise = processingPromise.then(
-      //   () => new Promise(
-      //     (resolve, reject) => mkdirp(
-      //       instrumentPath,
-      //       (err) => {
-      //         if (err) {
-      //           reject(err);
-      //           return;
-      //         }
-
-      //         resolve();
-      //       },
-      //     ),
-      //   ),
       const mkdirPromise = new Promise(
         (resolve, reject) => mkdirp(
           instrumentPath,
@@ -168,42 +224,41 @@ new Promise(
 
       for (let note = 0; note <= maxNoteNumber; note++) {
         const promise = mkdirPromise.then(
-          () => processNote({
+          () => processInChild({
             instrument: preset.MIDINumber,
             instrumentPath,
             note,
             stagingDir,
           }),
-        ).then(
-          () => progressBar.tick(),
-        ).catch<[any]|undefined>(
-          (err: any) => {
-            progressBar.tick();
+        );
 
-            if (!Array.isArray(err)) {
-              err = [err];
+        // Make sure to tick whether it's resolved or rejected--but no need
+        // to catch on the promise that gets pushed (otherwise we'd need to
+        // propagate the error)
+        promise.then(
+          () => {
+            if (progressBar) {
+              progressBar.tick();
             }
-
-            err = err.filter(
-              (error: any) => {
-                // Generally just means it couldn't delete a temp file. Ignore.
-                if (error.syscall === "unlink") {
-                  return false;
-                }
-
-                return true;
-              },
-            );
-
-            if (err.length > 0) {
-              return Promise.reject(err);
+          },
+        ).catch(
+          () => {
+            if (progressBar) {
+              progressBar.tick();
             }
           },
         );
 
         promises.push(promise);
       }
+      /// DEBUG
+      // if (instrumentCount++ === 50) {
+      //   break;
+      // }
+      /// END DEBUG
     }
+
+    // promises.push(cpPromise);
   },
 ).then(
   () => Promise.all(promises),

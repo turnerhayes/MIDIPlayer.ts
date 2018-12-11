@@ -8,9 +8,9 @@ export default class GeneratorValue {
   get range(): [number, number] {
     return [
       // tslint:disable-next-line:no-bitwise
-      this.value & 0xF,
+      this.value & 0xFF,
       // tslint:disable-next-line:no-bitwise
-      this.value >> 4,
+      this.value >> 8,
     ];
   }
 
@@ -31,9 +31,9 @@ export default class GeneratorValue {
 
   public toJSON() {
     return {
-      range: this.range,
-      signedValue: this.signedValue,
-      unsignedValue: this.unsignedValue,
+      asRange: this.range,
+      asSignedValue: this.signedValue,
+      asUnsignedValue: this.unsignedValue,
     };
   }
 }

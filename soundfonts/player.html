@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>File Player</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="../wav-parser/dist/wav-parser.js"></script>
+  <script src="./player.js"></script>
+</head>
+<body>
+  <div>
+    <select
+      id="sampleselector"
+    >
+    </select>
+    <button
+      id="playbutton"
+      disabled
+    >Play</button>
+    <label>
+      Pitch shift (cents)
+      <input
+        id="shiftinput"
+        type="number"
+        value="0"
+      />
+    </label>
+    <label>
+      <input
+        id="loopcheckbox"
+        type="checkbox"
+        checked
+      />
+      Loop sample
+    </label>
+  </div>
+  <div>
+    <label>
+      Note duration
+      <input
+        id="noteduration"
+        type="number"
+      />
+    </label>
+  </div>
+</body>
+</html>

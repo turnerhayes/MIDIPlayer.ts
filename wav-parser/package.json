@@ -1,0 +1,22 @@
+{
+  "name": "wav-parser",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "webpack"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "riff-chunks": "9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "10.12.12",
+    "ts-loader": "5.3.1",
+    "ts-node": "^7.0.1",
+    "typescript": "3.2.2",
+    "webpack": "4.27.1",
+    "webpack-cli": "3.1.2"
+  }
+}

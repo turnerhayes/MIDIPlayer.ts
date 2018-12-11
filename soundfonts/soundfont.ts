@@ -1,83 +1,36 @@
 import fs from "fs";
 import { findChunk, riffChunks } from "riff-chunks";
 
-import GeneratorTypes from "./generator-types";
-import GeneratorValue from "./generator-value";
-import ModulatorTypes from "./modulator-types";
-import SampleLinkTypes from "./sample-link-types";
-import SoundfontParseError from "./soundfont-parse-error";
-import TransformTypes from "./transform-types";
+import GeneratorTypes from "./soundfont-parser/generator-types";
+import GeneratorValue from "./soundfont-parser/generator-value";
+import IInstrumentSample from "./soundfont-parser/IInstrumentSample";
+import Instrument from "./soundfont-parser/instrument";
+import IPreset from "./soundfont-parser/IPreset";
+import IPresetInstrument from "./soundfont-parser/IPresetInstrument";
+import ModulatorTypes from "./soundfont-parser/modulator-types";
+import IGeneratorInfo from "./soundfont-parser/parser-interfaces/IGeneratorInfo";
+import IInstrumentHeader from "./soundfont-parser/parser-interfaces/IInstrumentHeader";
+import IModulatorInfo from "./soundfont-parser/parser-interfaces/IModulatorInfo";
+import IPresetHeader from "./soundfont-parser/parser-interfaces/IPresetHeader";
+import ISampleHeader from "./soundfont-parser/parser-interfaces/ISampleHeader";
+import ISoundfontHeaderInfo from "./soundfont-parser/parser-interfaces/ISoundfontHeaderInfo";
+import IVersionTag from "./soundfont-parser/parser-interfaces/IVersionTag";
+import Sample from "./soundfont-parser/sample";
+import SampleLinkTypes from "./soundfont-parser/sample-link-types";
+import SoundfontParseError from "./soundfont-parser/soundfont-parse-error";
+import TransformTypes from "./soundfont-parser/transform-types";
 
 type Bags = Array<{
   generatorIndex: number;
   modulatorIndex: number;
 }>;
 
-interface IConstructorParameters {
+export interface ISoundfontConstructorParameters {
+  file: Buffer;
   header: ISoundfontHeaderInfo;
   presets: IPreset[];
-  instruments: IInstrument[];
-}
-
-interface IGeneratorInfo {
-  generatorType: string;
-  value: GeneratorValue;
-  index: number;
-}
-
-interface IModulatorInfo {
-  amount: number;
-  amountSourceOperator: string;
-  destinationOperator: string;
-  sourceOperator: string;
-  transformOperator: string;
-  index: number;
-}
-
-interface IVersionTag {
-  major: number;
-  minor: number;
-}
-
-interface ISoundfontHeaderInfo {
-  bankName: string;
-  copyright: string|null;
-  comments: string|null;
-  creationDate: string|null;
-  engineers: string|null;
-  product: string|null;
-  soundEngine: string;
-  soundfontTools: string|null;
-  wavetableROM: string|null;
-  wavetableRevision?: IVersionTag|null;
-  version: IVersionTag;
-}
-
-interface IInstrumentHeader {
-  index: number;
-  instrumentBagIndex: number;
-  name: string;
-}
-
-interface IInstrument {
-  name: string;
-}
-
-interface IPresetHeader {
-  bankNumber: number;
-  genre: number;
-  library: number;
-  morphology: number;
-  presetBagIndex: number;
-  presetName: string;
-  presetNumber: number;
-  index: number;
-}
-
-interface IPreset {
-  name: string;
-  MIDINumber: number;
-  instruments: IInstrument[];
+  instruments: Instrument[];
+  sampleHeaders: ISampleHeader[];
 }
 
 const readString = (file: Buffer, chunk: IDataChunk, start?: number) => {
@@ -246,11 +199,10 @@ function readGenerators(file: Buffer, chunk: IDataChunk): IGeneratorInfo[] {
   const generators = [];
 
   while (offset < chunk.chunkData.end) {
-    const generatorNumber = file.readUInt16LE(offset);
-    const generatorType = GeneratorTypes[generatorNumber] as string;
+    const generatorType = file.readUInt16LE(offset);
 
-    if (!generatorType) {
-      throw new SoundfontParseError(`No generator type found for value ${generatorNumber}`);
+    if (!GeneratorTypes[generatorType]) {
+      throw new SoundfontParseError(`No generator type found for value ${generatorType}`);
     }
 
     offset += 2;
@@ -299,6 +251,59 @@ function readModulators(file: Buffer, chunk: IDataChunk): IModulatorInfo[] {
   return modulators;
 }
 
+const readSampleHeaders = (file: Buffer, chunk: IDataChunk): ISampleHeader[] => {
+  let offset = chunk.chunkData.start;
+
+  const headers = [];
+
+  while (offset < chunk.chunkData.end) {
+    const sampleName = readString(file, chunk, offset);
+    offset += 20;
+
+    const start = file.readUInt32LE(offset);
+    offset += 4;
+
+    const end = file.readUInt32LE(offset);
+    offset += 4;
+
+    const loopStart = file.readUInt32LE(offset);
+    offset += 4;
+
+    const loopEnd = file.readUInt32LE(offset);
+    offset += 4;
+
+    const sampleRate = file.readUInt32LE(offset);
+    offset += 4;
+
+    const originalPitch = file.readUInt8(offset);
+    offset += 1;
+
+    const pitchCorrection = file.readInt8(offset);
+    offset += 1;
+
+    const sampleLink = file.readUInt16LE(offset);
+    offset += 2;
+
+    const sampleLinkType = file.readUInt16LE(offset);
+    offset += 2;
+
+    headers.push({
+      end,
+      loopEnd,
+      loopStart,
+      originalPitch,
+      pitchCorrection,
+      sampleLink,
+      sampleLinkType,
+      sampleName,
+      sampleRate,
+      start,
+    });
+  }
+
+  return headers;
+};
+
 export default class Soundfont {
   public static parse(fileSpec: Buffer|string): Promise<Soundfont> {
     let readPromise: Promise<Buffer>;
@@ -331,12 +336,14 @@ export default class Soundfont {
 
         const header = readHeaderInfo(file, infoChunk);
 
-        const sampleDataChunk = infoChunk.subChunks.find(
+        const sampleDataListChunk = infoChunk.subChunks.find(
           (chunk: IChunk) => {
             return (chunk as IListChunk).format === "sdta";
         }) as IListChunk;
 
-        const presetDataChunk = sampleDataChunk.subChunks.find(
+        const sampleDataChunk = findChunk(sampleDataListChunk.subChunks, "smpl") as IDataChunk;
+
+        const presetDataChunk = sampleDataListChunk.subChunks.find(
           (chunk: IChunk) => {
             return (chunk as IListChunk).format === "pdta";
           },
@@ -350,8 +357,6 @@ export default class Soundfont {
 
         const instrumentModulators = readModulators(file, findChunk(presetDataChunk.subChunks, "imod") as IDataChunk);
 
-        const instruments: IInstrument[] = [];
-
         const presetHeaders = readPresetHeaders(file, presetDataChunk);
 
         const presetBags = readBags(file, findChunk(presetDataChunk.subChunks, "pbag") as IDataChunk);
@@ -360,7 +365,33 @@ export default class Soundfont {
 
         const presetModulators = readModulators(file, findChunk(presetDataChunk.subChunks, "pmod") as IDataChunk);
 
+        const sampleHeaders = readSampleHeaders(file, findChunk(presetDataChunk.subChunks, "shdr") as IDataChunk);
+
+        const instruments: Instrument[] = [];
+
         const presets: IPreset[] = [];
+
+        const allSamples: Sample[] = [];
+
+        sampleHeaders.forEach(
+          (sampleHeader) => {
+            allSamples.push(
+              new Sample({
+                data: new DataView(
+                  file.buffer,
+                  // Need to multiply offsets by 2 because start and end are
+                  // in sample points, and each sample is 16 bits (2 bytes)
+                  // NOTE: This parser doesn't account for 24 bit samples.
+                  sampleDataChunk.chunkData.start + (sampleHeader.start * 2),
+                  (sampleHeader.end * 2) - (sampleHeader.start * 2),
+                ),
+                dataOffset: sampleDataChunk.chunkData.start,
+                file,
+                header: sampleHeader,
+              }),
+            );
+          },
+        );
 
         instrumentHeaders.forEach(
           (instrumentHeader, headerIndex) => {
@@ -377,6 +408,10 @@ export default class Soundfont {
             const nextBag = endIndex === undefined ?
               undefined :
               instrumentBags[endIndex];
+
+            const instrumentSampleHeaders: ISampleHeader[] = [];
+
+            const instrumentSamples: IInstrumentSample[] = [];
 
             bags.forEach(
               (bag, bagIndex) => {
@@ -396,12 +431,44 @@ export default class Soundfont {
 
                 const generators = instrumentGenerators.slice(startGeneratorIndex, endGeneratorIndex);
                 const modulators = instrumentModulators.slice(startModulatorIndex, endModulatorIndex);
+
+                let pan: number|undefined;
+                let sampleIndex: number|undefined;
+                generators.forEach(
+                  (generator) => {
+                    if (generator.generatorType === GeneratorTypes.sampleID) {
+                      sampleIndex = generator.value.unsignedValue;
+
+                      if (!allSamples[sampleIndex]) {
+                        throw new SoundfontParseError(
+                          `Instrument ${
+                            instrumentHeader.name
+                          } refers to non-existent sample index ${
+                            sampleIndex
+                          }`,
+                        );
+                      }
+                    } else if (generator.generatorType === GeneratorTypes.pan) {
+                      pan = generator.value.signedValue;
+                    }
+                  },
+                );
+
+                if (sampleIndex) {
+                  instrumentSamples.push({
+                    pan,
+                    sample: allSamples[sampleIndex],
+                  });
+                }
               },
             );
 
-            instruments.push({
+            const instrument = new Instrument({
               name: instrumentHeader.name,
+              samples: instrumentSamples,
             });
+
+            instruments.push(instrument);
           },
         );
 
@@ -421,7 +488,7 @@ export default class Soundfont {
               undefined :
               presetBags[endIndex];
 
-            const presetInstruments: IInstrument[] = [];
+            const presetInstruments: IPresetInstrument[] = [];
 
             bags.forEach(
               (bag, bagIndex) => {
@@ -442,21 +509,35 @@ export default class Soundfont {
                 const generators = presetGenerators.slice(startGeneratorIndex, endGeneratorIndex);
                 const modulators = presetModulators.slice(startModulatorIndex, endModulatorIndex);
 
+                let keyRange: [number, number]|undefined;
+                let velocityRange: [number, number]|undefined;
+                let instrument: Instrument|undefined;
+
                 generators.forEach(
                   (generatorInfo) => {
-                    if (generatorInfo.generatorType === "instrument") {
+                    if (generatorInfo.generatorType === GeneratorTypes.keyRange) {
+                      keyRange = generatorInfo.value.range;
+                    } else if (generatorInfo.generatorType === GeneratorTypes.velRange) {
+                      velocityRange = generatorInfo.value.range;
+                    } else if (generatorInfo.generatorType === GeneratorTypes.instrument) {
                       const instrumentIndex = generatorInfo.value.unsignedValue;
 
                       if (!instruments[instrumentIndex]) {
                         throw new SoundfontParseError(`No instrument found at index ${instrumentIndex}`);
                       }
 
-                      presetInstruments.push(
-                        instruments[instrumentIndex],
-                      );
+                      instrument = instruments[instrumentIndex];
                     }
                   },
                 );
+
+                if (instrument) {
+                  presetInstruments.push({
+                    instrument,
+                    keyRange,
+                    velocityRange,
+                  });
+                }
               },
             );
 
@@ -469,30 +550,40 @@ export default class Soundfont {
         );
 
         return new Soundfont({
+          file,
           header,
           instruments,
           presets,
+          sampleHeaders,
         });
       },
     );
   }
 
+  public file: Buffer;
+
   public header: ISoundfontHeaderInfo;
 
-  public instruments: IInstrument[];
+  public instruments: Instrument[];
 
   public presets: IPreset[];
 
+  public sampleHeaders: ISampleHeader[];
+
   constructor(
     {
+      file,
       header,
       instruments,
       presets,
-    }: IConstructorParameters,
+      sampleHeaders,
+    }: ISoundfontConstructorParameters,
   ) {
+    this.file = file;
     this.header = header;
     this.instruments = instruments;
     this.presets = presets;
+    this.sampleHeaders = sampleHeaders;
   }
 
   public toString() {
