@@ -1,29 +1,5 @@
 "use strict";
 
-// This is passed in an unsigned 16-bit integer array. It is converted to a 32-bit float array.
-// The first startIndex items are skipped, and only 'length' number of items is converted.
-function int16ToFloat32(inputArray, startIndex, length) {
-  if (startIndex === undefined) {
-    startIndex = 0;
-  }
-
-  if (length === undefined) {
-    length = inputArray.length;
-  }
-  const output = new Float32Array(inputArray.length - startIndex);
-  for (let i = startIndex; i < length; i++) {
-    const int = inputArray[i];
-    // If the high bit is on, then it is a negative number, and actually counts backwards.
-    // const float = (int < 0) ? -(0x10000 - int) / 0x8000 : int / 0x7FFF;
-    // const float = int < 0 ?
-    //   (int / 32768) :
-    //   (int / 32767)
-    const float = int / 32768;
-    output[i] = float;
-  }
-  return output;
-}
-
 const getSampleDataPromise = fetch(
   "./rendered-samples/samples.json"
 ).then(

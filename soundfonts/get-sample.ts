@@ -9,11 +9,13 @@ import Soundfont from "./soundfont";
 import Instrument from "./soundfont-parser/instrument";
 import IPreset from "./soundfont-parser/IPreset";
 import Sample from "./soundfont-parser/sample";
+import SampleLinkTypes from "./soundfont-parser/sample-link-types";
 
 const debug = createDebug("soundfont:get-sample");
 
 /// DEBUG
 
+// const sfpath = "./OmegaGMGS2.sf2";
 const sfpath = "/usr/share/sounds/sf2/FluidR3_GM.sf2";
 
 /// END DEBUG
@@ -25,6 +27,13 @@ function getSampleDirectoryPath(preset: IPreset): string {
 
   return dirPath;
 }
+
+const getSampleWavPath = (
+  preset: IPreset,
+  sample: Sample,
+): string => {
+  return path.resolve(getSampleDirectoryPath(preset), `${sample.name}.wav`);
+};
 
 function createSampleDirectory(preset: IPreset): Promise<string> {
   const dirPath = getSampleDirectoryPath(preset);
@@ -45,7 +54,192 @@ function createSampleDirectory(preset: IPreset): Promise<string> {
   );
 }
 
-function writeSampleMetadata(
+const mergeRanges = (
+  ranges: Array<[number, number]|undefined>,
+): [number, number] | undefined => {
+  let finalRange: [number, number]|undefined;
+
+  for (const range of ranges) {
+    // undefined range === all values
+    if (range === undefined) {
+      return undefined;
+    }
+
+    if (!finalRange) {
+      finalRange = range;
+    } else {
+      if (range[0] < finalRange[0]) {
+        finalRange[0] = range[0];
+      }
+
+      if (range[1] > finalRange[1]) {
+        finalRange[1] = range[1];
+      }
+    }
+  }
+
+  return finalRange;
+};
+
+const getSampleID = (
+  presetNumber: number,
+  instrumentIndex: number,
+  sampleIndex: number,
+): string => {
+  return `${presetNumber}.${instrumentIndex}.${sampleIndex}`;
+};
+
+const writeSampleSummaryFile = (soundfont: Soundfont): Promise<void> => {
+  interface ISampleInfo {
+    instrumentIndex?: number;
+    instrumentName?: string;
+    originalPitch: number;
+    path: string;
+    pan?: number;
+    sampleIndex: number;
+    sampleLinkType: string;
+    sampleLinkIndex: number;
+  }
+
+  const summaryData: {
+    presets: {
+      [presetID: number]: {
+        keys: {
+          [keys: string]: {
+            [velocities: string]: ISampleInfo[],
+          },
+        },
+        samples?: {
+          [sampleID: string]: ISampleInfo,
+        },
+        samplesByOriginalPitch: {
+          [originalPitch: number]: ISampleInfo[],
+        },
+        keyMap?: {
+          [keys: string]: string[],
+        },
+        name: string,
+        velocityMap?: {
+          [velocities: string]: string[],
+        },
+      },
+    },
+  } = {
+    presets: {},
+  };
+
+  soundfont.presets.forEach(
+    (preset) => {
+      const samples = {};
+
+      const keyRanges: Array<[number, number]|undefined> = [];
+      const velocityRanges: Array<[number, number]|undefined> = [];
+
+      const sampleInfo: {
+        [sampleID: string]: ISampleInfo,
+      } = {};
+
+      const keyMap: {
+        [keys: string]: string[],
+      } = {};
+
+      const velocityMap: {
+        [velocities: string]: string[],
+      } = {};
+
+      const keys: {
+        [keys: string]: {
+          [velocities: string]: ISampleInfo[],
+        },
+      } = {};
+
+      const samplesByOriginalPitch: {
+        [originalPitch: number]: ISampleInfo[],
+      } = {};
+
+      preset.instruments.forEach(
+        // tslint:disable-next-line:no-shadowed-variable
+        ({ instrument, keyRange, velocityRange }, instrumentIndex) => {
+          const keyString = keyRange === undefined ?
+            "*" :
+            `${keyRange[0]}-${keyRange[1]}`;
+
+          const velocityString = velocityRange === undefined ?
+            "*" :
+            `${velocityRange[0]}-${velocityRange[1]}`;
+
+          keyMap[keyString] = [];
+          velocityMap[velocityString] = [];
+
+          if (!keys[keyString]) {
+            keys[keyString] = {};
+          }
+
+          if (!keys[keyString][velocityString]) {
+            keys[keyString][velocityString] = [];
+          }
+
+          instrument.samples.forEach(
+            ({ sample, pan }, sampleIndex) => {
+              const samplePath = path.relative(__dirname, getSampleWavPath(preset, sample));
+              const sampleID = getSampleID(preset.MIDINumber, instrumentIndex, sampleIndex);
+              const sampleInfoItem: ISampleInfo = {
+                instrumentIndex,
+                instrumentName: instrument.name,
+                originalPitch: sample.originalPitch,
+                pan,
+                path: samplePath,
+                sampleIndex: sample.sampleIndex,
+                sampleLinkIndex: sample.sampleLinkIndex,
+                sampleLinkType: SampleLinkTypes[sample.sampleLinkType],
+              };
+
+              keys[keyString][velocityString].push(sampleInfoItem);
+
+              if (!samplesByOriginalPitch[sample.originalPitch]) {
+                samplesByOriginalPitch[sample.originalPitch] = [];
+              }
+
+              samplesByOriginalPitch[sample.originalPitch].push(sampleInfoItem);
+
+              sampleInfo[sampleID] = sampleInfoItem;
+
+              keyMap[keyString].push(sampleID);
+              velocityMap[velocityString].push(sampleID);
+            },
+          );
+        },
+      );
+
+      const velocityRange = mergeRanges(velocityRanges);
+
+      summaryData.presets[preset.MIDINumber] = {
+        // keyMap,
+        keys,
+        name: preset.name,
+        // samples: sampleInfo,
+        samplesByOriginalPitch,
+        // velocityMap,
+      };
+    },
+  );
+
+  return new Promise<void>(
+    (resolve, reject) => fs.writeFile(
+      path.join(basePath, "font-summary.json"),
+      JSON.stringify(summaryData, null, "  "),
+      (err) => {
+        if (err) {
+          return reject(err);
+        }
+
+        return resolve();
+      },
+    ),
+  );
+};
+
+const writeSampleMetadata = (
   {
     preset,
     instrument,
@@ -59,7 +253,7 @@ function writeSampleMetadata(
       pan: number|undefined,
     },
   },
-): Promise<string> {
+): Promise<string> => {
   const filePath = path.resolve(getSampleDirectoryPath(preset), `${sample.name}.metadata.json`);
 
   const data = JSON.stringify({
@@ -86,10 +280,10 @@ function writeSampleMetadata(
       },
     ),
   );
-}
+};
 
-function writeWavFile(sampleData: DataView, preset: IPreset, sample: Sample): Promise<string> {
-  const sampleWavOutPath = path.resolve(getSampleDirectoryPath(preset), `${sample.name}.wav`);
+const writeWavFile = (sampleData: DataView, preset: IPreset, sample: Sample): Promise<string> => {
+  const sampleWavOutPath = getSampleWavPath(preset, sample);
 
   return new Promise<string>(
     (resolve, reject) => fs.writeFile(
@@ -105,9 +299,9 @@ function writeWavFile(sampleData: DataView, preset: IPreset, sample: Sample): Pr
       },
     ),
   );
-}
+};
 
-function writeMP3File(sampleData: Buffer, preset: IPreset, sample: Sample): Promise<string> {
+const writeMP3File = (sampleData: Buffer, preset: IPreset, sample: Sample): Promise<string> => {
   const sampleMP3OutPath = path.resolve(getSampleDirectoryPath(preset), `${sample.name}.mp3`);
 
   const encoder = new lamejs.Mp3Encoder(1, sample.sampleRate, 128);
@@ -157,12 +351,18 @@ function writeMP3File(sampleData: Buffer, preset: IPreset, sample: Sample): Prom
       },
     ),
   );
-}
+};
 
 const convertedSamples: any = {};
 
 Soundfont.parse(sfpath).then(
   (sf) => {
+    /// DEBUG
+    return writeSampleSummaryFile(sf).then(
+      () => ([]),
+    );
+    /// END DEBUG
+
     const promises: Array<Promise<any>> = [];
 
     sf.presets.forEach(

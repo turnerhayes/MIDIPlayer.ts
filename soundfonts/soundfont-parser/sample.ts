@@ -1,10 +1,11 @@
 import ISampleHeader from "./parser-interfaces/ISampleHeader";
+import SampleLinkTypes from "./sample-link-types";
 
 export interface ISampleConstructorParameters {
-  file: Buffer;
   header: ISampleHeader;
-  dataOffset: number;
+  linkedSample?: Sample;
   data: DataView;
+  sampleIndex: number;
 }
 
 export default class Sample {
@@ -24,6 +25,14 @@ export default class Sample {
     return this.header.originalPitch;
   }
 
+  public get sampleLinkType(): SampleLinkTypes {
+    return this.header.sampleLinkType;
+  }
+
+  public get sampleLinkIndex(): number {
+    return this.header.sampleLink;
+  }
+
   /**
    * The loop start and end, in samples (relative to the start of this sample's data)
    */
@@ -36,22 +45,22 @@ export default class Sample {
 
   public data: DataView;
 
-  private file: Buffer;
+  public sampleIndex: number;
+
+  public linkedSample?: Sample;
 
   private header: ISampleHeader;
 
-  private dataOffset: number;
-
   constructor({
-    file,
     header,
-    dataOffset,
+    linkedSample,
     data,
+    sampleIndex,
   }: ISampleConstructorParameters) {
-    this.file = file;
     this.header = header;
-    this.dataOffset = dataOffset;
+    this.linkedSample = linkedSample;
     this.data = data;
+    this.sampleIndex = sampleIndex;
   }
 
   public toJSON() {

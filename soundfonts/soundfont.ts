@@ -1,3 +1,4 @@
+import createDebugger from "debug";
 import fs from "fs";
 import { findChunk, riffChunks } from "riff-chunks";
 
@@ -19,6 +20,8 @@ import Sample from "./soundfont-parser/sample";
 import SampleLinkTypes from "./soundfont-parser/sample-link-types";
 import SoundfontParseError from "./soundfont-parser/soundfont-parse-error";
 import TransformTypes from "./soundfont-parser/transform-types";
+
+const debug = createDebugger("soundfont-parser");
 
 type Bags = Array<{
   generatorIndex: number;
@@ -373,28 +376,82 @@ export default class Soundfont {
 
         const allSamples: Sample[] = [];
 
+        const sampleLinks: {
+          [sampleIndex: number]: {
+            otherSample?: Sample,
+            side: "right"|"left",
+          },
+        } = {};
+
+        let unusedSamples = new Set<number>();
+
         sampleHeaders.forEach(
-          (sampleHeader) => {
-            allSamples.push(
-              new Sample({
-                data: new DataView(
-                  file.buffer,
-                  // Need to multiply offsets by 2 because start and end are
-                  // in sample points, and each sample is 16 bits (2 bytes)
-                  // NOTE: This parser doesn't account for 24 bit samples.
-                  sampleDataChunk.chunkData.start + (sampleHeader.start * 2),
-                  (sampleHeader.end * 2) - (sampleHeader.start * 2),
-                ),
-                dataOffset: sampleDataChunk.chunkData.start,
-                file,
-                header: sampleHeader,
-              }),
-            );
+          (sampleHeader, sampleIndex) => {
+            unusedSamples = unusedSamples.add(sampleIndex);
+            const sample = new Sample({
+              data: new DataView(
+                file.buffer,
+                // Need to multiply offsets by 2 because start and end are
+                // in sample points, and each sample is 16 bits (2 bytes)
+                // NOTE: This parser doesn't account for 24 bit samples.
+                sampleDataChunk.chunkData.start + (sampleHeader.start * 2),
+                (sampleHeader.end * 2) - (sampleHeader.start * 2),
+              ),
+              header: sampleHeader,
+              sampleIndex,
+            });
+
+            if (sampleHeader.sampleLinkType === SampleLinkTypes.leftSample) {
+              sampleLinks[sampleIndex] = {
+                side: "left",
+              };
+            } else if (sampleHeader.sampleLinkType === SampleLinkTypes.rightSample) {
+              sampleLinks[sampleIndex] = {
+                side: "right",
+              };
+            }
+
+            // There is a linkage to be made...
+            if (sampleLinks[sampleIndex]) {
+              // The other sample may not yet have been instantiated, but if it has, link it up
+              if (allSamples[sampleHeader.sampleLink]) {
+                if (!sampleLinks[sampleHeader.sampleLink]) {
+                  debug(
+                    `Sample #${
+                      sampleIndex
+                    } (${
+                      sample.name
+                    }) links to sample #${
+                      sample.sampleLinkIndex
+                    } but sample #${sample.sampleLinkIndex} does not seem to have a link`,
+                  );
+                } else {
+                  sampleLinks[sampleIndex].otherSample = allSamples[sampleHeader.sampleLink];
+                  sampleLinks[sampleHeader.sampleLink].otherSample = sample;
+                }
+
+              }
+            }
+
+            allSamples[sampleIndex] = sample;
           },
         );
 
+        // All sample links should be instantiated; link them up in the sample objects
+        for (const sampleIndex in sampleLinks) {
+          if (!sampleLinks.hasOwnProperty(sampleIndex)) {
+            continue;
+          }
+
+          allSamples[sampleIndex].linkedSample = sampleLinks[sampleIndex].otherSample;
+        }
+
+        let unusedInstruments = new Set<number>();
+
         instrumentHeaders.forEach(
           (instrumentHeader, headerIndex) => {
+            unusedInstruments = unusedInstruments.add(headerIndex);
+
             const startIndex = instrumentHeader.instrumentBagIndex;
             let endIndex;
 
@@ -455,6 +512,7 @@ export default class Soundfont {
                 );
 
                 if (sampleIndex) {
+                  unusedSamples.delete(sampleIndex);
                   instrumentSamples.push({
                     pan,
                     sample: allSamples[sampleIndex],
@@ -471,6 +529,10 @@ export default class Soundfont {
             instruments.push(instrument);
           },
         );
+
+        if (unusedSamples.size > 0) {
+          console.warn(`Unused sample indices: ${Array.from(unusedSamples).join(", ")}`);
+        }
 
         presetHeaders.forEach(
           (presetHeader, headerIndex) => {
@@ -526,6 +588,8 @@ export default class Soundfont {
                         throw new SoundfontParseError(`No instrument found at index ${instrumentIndex}`);
                       }
 
+                      unusedInstruments.delete(instrumentIndex);
+
                       instrument = instruments[instrumentIndex];
                     }
                   },
@@ -548,6 +612,10 @@ export default class Soundfont {
             });
           },
         );
+
+        if (unusedInstruments.size > 0) {
+          console.warn(`Unused instrument indices: ${Array.from(unusedInstruments).join(", ")}`);
+        }
 
         return new Soundfont({
           file,
